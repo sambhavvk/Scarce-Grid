@@ -37,7 +37,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="C:\Users\sambh\projs\Information Retrieval\Scarce-Grid\ScarceGrid\venv"
+VIRTUAL_ENV="C:\Users\sambh\projs\Information Retrieval\Scarce-Grid\ScarceGrid\ScarceGrid\venv"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"
