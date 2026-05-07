@@ -1,0 +1,26 @@
+{
+    "environment": {
+        "grid_size": 5,
+        "reward_count": 4
+    },
+    "agent": {
+        "learning_rate": 0.1,
+        "discount_factor": 0.95,
+        "initial_exploration_rate": 1.0,
+        "min_exploration_rate": 0.01,
+        "exploration_decay_rate": 0.995
+    },
+    "training": {
+        "episodes": 1000,
+        "max_steps_per_episode": 200,
+        "num_agents": 2,
+        "seed": 42
+    },
+    "game_theory": {
+        "strategies": ["cooperative", "competitive", "mixed"],
+        "reward_shaping": {
+            "cooperation_bonus": 1.5,
+            "competition_penalty": 0.5
+        }
+    }
+}
