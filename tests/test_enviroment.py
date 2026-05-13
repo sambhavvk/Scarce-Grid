@@ -9,14 +9,13 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
 # Import the environment to test
-from src.environment import ScarceGridEnv
-
+from src.environment import ScarseGridEnv  # 
 class TestScarceGridEnvironment(unittest.TestCase):
     def setUp(self):
         """
         Set up the environment before each test
         """
-        self.env = ScarceGridEnv(grid_size=5)
+        self.env = ScarseGridEnv(grid_size=5)
     
     def test_environment_creation(self):
         """
