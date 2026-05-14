@@ -3,26 +3,25 @@ import gymnasium as gym
 from gymnasium import spaces
 import random
 
-class ScarseGridEnv(gym.Env):  # Note the spelling: ScarseGridEnv, not ScarceGridEnv
-    """
-    ScarseGrid Environment for Multi-Agent Reinforcement Learning
-    """
-    def __init__(self, grid_size=5, seed=None):
+class ScarseGridEnv(gym.Env):
+    def __init__(self, grid_size=5, seed_value=None):  # Changed from 'seed' to 'seed_value'
         """
         Initialize the ScarseGrid environment
         
         Args:
             grid_size (int): Size of the grid
-            seed (int, optional): Random seed for reproducibility
+            seed_value (int, optional): Random seed for reproducibility
         """
         super().__init__()
         
         # Environment configuration
         self.grid_size = grid_size
-        self.seed_value = seed
-        if seed is not None:
-            np.random.seed(seed)
-            random.seed(seed)
+        self.seed_value = seed_value  # Store seed value
+        
+        # Set random seed if provided
+        if seed_value is not None:
+            np.random.seed(seed_value)
+            random.seed(seed_value)
         
         # Reward configuration
         self.super_reward = 10.0
@@ -151,17 +150,3 @@ class ScarseGridEnv(gym.Env):  # Note the spelling: ScarseGridEnv, not ScarceGri
         done = np.sum(self.grid) == 0
         
         return self.grid, rewards, done, False, {}
-
-# Optional: If you want to test the environment directly
-if __name__ == "__main__":
-    env = ScarseGridEnv()
-    state, _ = env.reset()
-    print("Initial State:")
-    print(state)
-    
-    # Example step
-    actions = [0, 1]  # First agent goes up, second goes right
-    next_state, rewards, done, _, _ = env.step(actions)
-    print("\nNext State:")
-    print(next_state)
-    print("\nRewards:", rewards)

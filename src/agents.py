@@ -1,85 +1,129 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 import random
 
-class QLearningAgent:
-    def __init__(self, 
-                 action_space, 
-                 observation_space, 
-                 learning_rate=0.1, 
-                 discount_factor=0.95, 
-                 exploration_rate=1.0, 
-                 min_exploration_rate=0.01,
-                 exploration_decay_rate=0.995):
+# Check GPU availability
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+class MultiAgentQLearning:
+    def __init__(self, env, num_agents=2):
         """
-        Initialize Q-Learning Agent with configurable parameters
+        Compatibility wrapper for the GPU-based multi-agent trainer
         
         Args:
-            action_space (gym.spaces.Discrete): Action space of the environment
-            observation_space (gym.spaces.Box): Observation space of the environment
-            learning_rate (float): Rate of learning (alpha)
-            discount_factor (float): Future reward discount factor (gamma)
-            exploration_rate (float): Initial exploration probability
-            min_exploration_rate (float): Minimum exploration probability
-            exploration_decay_rate (float): Rate of exploration decay
+            env (gym.Env): Environment
+            num_agents (int): Number of agents
         """
-        self.action_space = action_space
-        self.observation_space = observation_space
-        
-        # Hyperparameters
-        self.learning_rate = learning_rate
-        self.discount_factor = discount_factor
-        self.exploration_rate = exploration_rate
-        self.min_exploration_rate = min_exploration_rate
-        self.exploration_decay_rate = exploration_decay_rate
-        
-        # Q-Table initialization
-        self.q_table = {}
+        self.trainer = GPUMultiAgentTrainer(env, num_agents)
+        self.agents = self.trainer.agents
     
-    def get_state_key(self, state):
+    def train(self, num_episodes=1000):
         """
-        Convert state to hashable representation
+        Train method compatible with previous implementation
         
         Args:
-            state (np.ndarray): Environment state
+            num_episodes (int): Number of training episodes
         
         Returns:
-            tuple: Hashable state representation
+            list: Reward history for each agent
         """
-        return tuple(state.flatten())
-    
-    def initialize_q_value(self, state):
+        return self.trainer.train(num_episodes)
+
+class DeepQNetwork(nn.Module):
+    def __init__(self, input_dim, output_dim):
         """
-        Initialize Q-values for a new state
+        Deep Q-Network for GPU-accelerated learning
         
         Args:
-            state (np.ndarray): Environment state
+            input_dim (int): Input dimension (flattened state space)
+            output_dim (int): Number of possible actions
         """
-        state_key = self.get_state_key(state)
-        if state_key not in self.q_table:
-            self.q_table[state_key] = np.zeros(self.action_space.n)
+        super(DeepQNetwork, self).__init__()
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, output_dim)
+        ).to(device)
     
-    def choose_action(self, state):
+    def forward(self, x):
         """
-        Choose action using epsilon-greedy strategy
+        Forward pass through the network
         
         Args:
-            state (np.ndarray): Current environment state
+            x (torch.Tensor): Input state
+        
+        Returns:
+            torch.Tensor: Q-values for actions
+        """
+        return self.network(x)
+
+class GPUQLearningAgent:
+    def __init__(
+        self, 
+        state_dim, 
+        action_dim, 
+        learning_rate=0.001,
+        gamma=0.99,
+        epsilon_start=1.0,
+        epsilon_end=0.01,
+        epsilon_decay=0.995
+    ):
+        """
+        GPU-Accelerated Q-Learning Agent
+        
+        Args:
+            state_dim (int): Dimension of the state space
+            action_dim (int): Number of possible actions
+        """
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        
+        # Q-Network and Target Network
+        self.q_network = DeepQNetwork(state_dim, action_dim).to(device)
+        self.target_network = DeepQNetwork(state_dim, action_dim).to(device)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        
+        # Optimizer and Loss
+        self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
+        self.loss_fn = nn.MSELoss()
+        
+        # Hyperparameters
+        self.gamma = gamma
+        self.epsilon = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
+    
+    def select_action(self, state):
+        """
+        Select action using epsilon-greedy strategy
+        
+        Args:
+            state (np.ndarray): Current state
         
         Returns:
             int: Selected action
         """
-        self.initialize_q_value(state)
-        state_key = self.get_state_key(state)
+        # Epsilon-greedy exploration
+        if random.random() < self.epsilon:
+            return random.randint(0, self.action_dim - 1)
         
-        # Exploration vs Exploitation
-        if random.uniform(0, 1) < self.exploration_rate:
-            return self.action_space.sample()
-        else:
-            return np.argmax(self.q_table[state_key])
+        # Convert state to tensor
+        state_tensor = torch.FloatTensor(state).flatten().to(device)
+        
+        # Get Q-values
+        with torch.no_grad():
+            q_values = self.q_network(state_tensor)
+        
+        return q_values.argmax().item()
     
-    def update(self, state, action, reward, next_state, done):
+    def train_step(self, state, action, reward, next_state, done):
         """
-        Q-Learning update rule
+        Perform a training step
         
         Args:
             state (np.ndarray): Current state
@@ -88,33 +132,47 @@ class QLearningAgent:
             next_state (np.ndarray): Next state
             done (bool): Episode termination flag
         """
-        self.initialize_q_value(state)
-        self.initialize_q_value(next_state)
+        # Convert to tensors
+        state = torch.FloatTensor(state).flatten().to(device)
+        next_state = torch.FloatTensor(next_state).flatten().to(device)
+        action = torch.LongTensor([action]).to(device)
+        reward = torch.FloatTensor([reward]).to(device)
+        done = torch.FloatTensor([done]).to(device)
         
-        state_key = self.get_state_key(state)
-        next_state_key = self.get_state_key(next_state)
+        # Current Q-values
+        current_q = self.q_network(state)[action]
         
-        # Q-Value update
-        if done:
-            max_next_q_value = 0
-        else:
-            max_next_q_value = np.max(self.q_table[next_state_key])
+        # Next Q-values
+        with torch.no_grad():
+            next_q = self.target_network(next_state).max()
         
-        # Q-Learning update equation
-        current_q = self.q_table[state_key][action]
-        new_q = current_q + self.learning_rate * (
-            reward + self.discount_factor * max_next_q_value - current_q
-        )
+        # Compute target Q-value
+        target_q = reward + (1 - done) * self.gamma * next_q
         
-        self.q_table[state_key][action] = new_q
+        # Compute loss
+        loss = self.loss_fn(current_q, target_q)
+        
+        # Optimize
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        # Decay epsilon
+        self.decay_exploration()
+    
+    def update_target_network(self):
+        """
+        Soft update of the target network
+        """
+        self.target_network.load_state_dict(self.q_network.state_dict())
     
     def decay_exploration(self):
         """
         Decay exploration rate
         """
-        self.exploration_rate = max(
-            self.min_exploration_rate, 
-            self.exploration_rate * self.exploration_decay_rate
+        self.epsilon = max(
+            self.epsilon_end, 
+            self.epsilon * self.epsilon_decay
         )
     
     def get_exploration_rate(self):
@@ -124,31 +182,38 @@ class QLearningAgent:
         Returns:
             float: Current exploration probability
         """
-        return self.exploration_rate
+        return self.epsilon
 
-class MultiAgentQLearning:
+class GPUMultiAgentTrainer:
     def __init__(self, env, num_agents=2):
         """
-        Multi-Agent Q-Learning Coordinator
+        Multi-Agent GPU Training
         
         Args:
-            env (gym.Env): OpenAI Gym compatible environment
+            env (gym.Env): Environment
             num_agents (int): Number of agents
         """
         self.env = env
+        
+        # Flatten state dimension
+        state_dim = np.prod(env.observation_space.shape)
+        action_dim = env.action_space.n
+        
+        # Create agents
         self.agents = [
-            QLearningAgent(
-                action_space=env.action_space, 
-                observation_space=env.observation_space
+            GPUQLearningAgent(
+                state_dim=state_dim, 
+                action_dim=action_dim
             ) for _ in range(num_agents)
         ]
     
-    def train(self, num_episodes=1000):
+    def train(self, num_episodes=1000, update_frequency=10):
         """
-        Train multiple agents in the environment
+        Train agents on GPU
         
         Args:
             num_episodes (int): Number of training episodes
+            update_frequency (int): How often to update target networks
         
         Returns:
             list: Reward history for each agent
@@ -156,80 +221,92 @@ class MultiAgentQLearning:
         agent_rewards = [[] for _ in self.agents]
         
         for episode in range(num_episodes):
-            states = self.env.reset()
+            # Reset environment
+            state, _ = self.env.reset()
             done = False
             
             while not done:
-                actions = []
-                # Get actions from each agent
-                for i, agent in enumerate(self.agents):
-                    action = agent.choose_action(states[i])
-                    actions.append(action)
+                # Select actions
+                actions = [
+                    agent.select_action(state) 
+                    for agent in self.agents
+                ]
                 
-                # Perform actions in environment
-                next_states, rewards, done, _, _ = self.env.step(actions)
+                # Environment step
+                next_state, rewards, done, _, _ = self.env.step(actions)
                 
-                # Update each agent
+                # Train each agent
                 for i, agent in enumerate(self.agents):
-                    agent.update(
-                        states[i], 
+                    agent.train_step(
+                        state, 
                         actions[i], 
                         rewards[i], 
-                        next_states[i], 
+                        next_state, 
                         done
                     )
                     agent_rewards[i].append(rewards[i])
-                    agent.decay_exploration()
                 
-                states = next_states
+                state = next_state
+                
+                # Periodic target network update
+                if episode % update_frequency == 0:
+                    for agent in self.agents:
+                        agent.update_target_network()
         
         return agent_rewards
 
-# Visualization Utility
-def plot_learning_curves(agent_rewards):
-    """
-    Plot learning curves for multiple agents
-    
-    Args:
-        agent_rewards (list): Reward history for each agent
-    """
-    import matplotlib.pyplot as plt
-    
-    plt.figure(figsize=(10, 5))
-    for i, rewards in enumerate(agent_rewards):
-        plt.plot(
-            np.cumsum(rewards), 
-            label=f'Agent {i+1} Cumulative Reward'
-        )
-    
-    plt.title('Multi-Agent Learning Dynamics')
-    plt.xlabel('Time Steps')
-    plt.ylabel('Cumulative Reward')
-    plt.legend()
-    plt.show()
+# TensorBoard Logging
+from torch.utils.tensorboard import SummaryWriter
 
-# Experimental Configuration Class
-class ExperimentConfig:
-    def __init__(self):
-        # Hyperparameter grid for experimentation
-        self.learning_rates = [0.1, 0.3, 0.5]
-        self.discount_factors = [0.9, 0.95, 0.99]
-        self.exploration_rates = [0.5, 0.7, 1.0]
-    
-    def generate_experiments(self):
+class TensorBoardLogger:
+    def __init__(self, log_dir='./runs'):
         """
-        Generate experiment configurations
+        TensorBoard logging for training metrics
         
-        Returns:
-            list: Experiment configurations
+        Args:
+            log_dir (str): Directory to save logs
         """
-        experiments = []
-        for lr in self.learning_rates:
-            for df in self.discount_factors:
-                for er in self.exploration_rates:
-                    experiments.append({
-                        'learning_rate': lr,
-                        'discount_factor': df,
-                        'exploration_rate': er
-                    })
-        return experiments
+        self.writer = SummaryWriter(log_dir)
+    
+    def log_episode(self, episode, rewards, losses):
+        """
+        Log training metrics
+        
+        Args:
+            episode (int): Current episode
+            rewards (list): Rewards for each agent
+            losses (list): Training losses
+        """
+        for i, (reward, loss) in enumerate(zip(rewards, losses)):
+            self.writer.add_scalar(f'Agent_{i}/Reward', reward, episode)
+            self.writer.add_scalar(f'Agent_{i}/Loss', loss, episode)
+    
+    def close(self):
+        """Close TensorBoard writer"""
+        self.writer.close()
+
+# Example Training Script
+def main():
+    import gymnasium as gym
+    
+    # Initialize environment
+    env = gym.make('CartPole-v1')  # Example environment
+    
+    # Create multi-agent trainer
+    trainer = GPUMultiAgentTrainer(env)
+    
+    # TensorBoard logging
+    logger = TensorBoardLogger()
+    
+    # Training loop
+    for episode in range(1000):
+        rewards = trainer.train(num_episodes=1)
+        
+        # Log to TensorBoard
+        logger.log_episode(episode, rewards[0], [0])  # Placeholder for losses
+    
+    # Close logger
+    logger.close()
+
+if __name__ == "__main__":
+    main()
