@@ -9,29 +9,73 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 class MultiAgentQLearning:
-    def __init__(self, env, num_agents=2):
+    def __init__(self, env, num_agents=2, learning_rate=0.1, discount_factor=0.95):
         """
-        Compatibility wrapper for the GPU-based multi-agent trainer
+        Multi-Agent Q-Learning Coordinator
         
         Args:
-            env (gym.Env): Environment
+            env (gym.Env): OpenAI Gym compatible environment
             num_agents (int): Number of agents
+            learning_rate (float): Learning rate for agents
+            discount_factor (float): Discount factor for future rewards
         """
-        self.trainer = GPUMultiAgentTrainer(env, num_agents)
-        self.agents = self.trainer.agents
+        self.env = env
+        self.agents = [
+            GPUQLearningAgent(
+                state_dim=np.prod(env.observation_space.shape),
+                action_dim=env.action_space.n,
+                learning_rate=learning_rate,
+                gamma=discount_factor
+            ) for _ in range(num_agents)
+        ]
     
-    def train(self, num_episodes=1000):
+    def train(self, num_episodes=1000, update_frequency=10):
         """
-        Train method compatible with previous implementation
+        Train multiple agents in the environment
         
         Args:
             num_episodes (int): Number of training episodes
+            update_frequency (int): Frequency of target network updates
         
         Returns:
             list: Reward history for each agent
         """
-        return self.trainer.train(num_episodes)
-
+        agent_rewards = [[] for _ in self.agents]
+        
+        for episode in range(num_episodes):
+            # Reset environment
+            states, _ = self.env.reset()
+            done = False
+            
+            while not done:
+                # Get actions from each agent
+                actions = []
+                for i, agent in enumerate(self.agents):
+                    action = agent.select_action(states)
+                    actions.append(action)
+                
+                # Perform actions in environment
+                next_states, rewards, done, _, _ = self.env.step(actions)
+                
+                # Update each agent
+                for i, agent in enumerate(self.agents):
+                    agent.train_step(
+                        states, 
+                        actions[i], 
+                        rewards[i], 
+                        next_states, 
+                        done
+                    )
+                    agent_rewards[i].append(rewards[i])
+                
+                # Periodic target network update
+                if episode % update_frequency == 0:
+                    for agent in self.agents:
+                        agent.update_target_network()
+                
+                states = next_states
+        
+        return agent_rewards
 class DeepQNetwork(nn.Module):
     def __init__(self, input_dim, output_dim):
         """
