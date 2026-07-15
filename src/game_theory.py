@@ -1,8 +1,8 @@
 import numpy as np
 import itertools
-import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+# BUG 26 FIX: Removed unused pandas import
 
 class RewardShapingStrategy:
     def __init__(self, base_reward_structure=None):
@@ -65,17 +65,15 @@ class RewardShapingStrategy:
         Returns:
             str: Interaction type
         """
-        # Simple interaction analysis
-        # You can expand this with more complex logic
         if len(agents_states) < 2:
             return 'neutral'
         
-        # Check proximity or shared resources
-        state_similarity = np.sum(np.abs(agents_states[0] - agents_states[1]))
+        # BUG FIX: Renamed variable for clarity (this is a distance, not similarity)
+        state_distance = np.sum(np.abs(agents_states[0] - agents_states[1]))
         
-        if state_similarity < 0.1:  # Agents are very close
+        if state_distance < 0.1:  # Agents are very close (competing for same resources)
             return 'competitive'
-        elif state_similarity > 0.5:  # Agents are somewhat aligned
+        elif state_distance > 0.5:  # Agents are spread out (cooperating)
             return 'cooperative'
         else:
             return 'neutral'
@@ -130,6 +128,9 @@ class GameTheoryAnalyzer:
             num_agents (int): Number of agents in the game
         """
         self.num_agents = num_agents
+        self.strategies = None
+        self.strategy_combinations = None
+        self.combination_to_index = None
     
     def create_payoff_matrix(self, strategies):
         """
@@ -141,17 +142,23 @@ class GameTheoryAnalyzer:
         Returns:
             np.ndarray: Payoff matrix
         """
-        strategy_combinations = list(itertools.product(strategies, repeat=self.num_agents))
-        payoff_matrix = np.zeros((len(strategy_combinations), self.num_agents))
+        # Store strategies for Nash equilibrium calculation
+        self.strategies = strategies
+        self.strategy_combinations = list(itertools.product(strategies, repeat=self.num_agents))
+        self.combination_to_index = {combo: i for i, combo in enumerate(self.strategy_combinations)}
         
-        for i, combination in enumerate(strategy_combinations):
+        payoff_matrix = np.zeros((len(self.strategy_combinations), self.num_agents))
+        
+        for i, combination in enumerate(self.strategy_combinations):
             payoff_matrix[i] = self._calculate_payoffs(combination)
         
         return payoff_matrix
     
     def _calculate_payoffs(self, strategies):
         """
-        Calculate payoffs for a specific strategy combination
+        BUG 15 FIX: Calculate payoffs based on actual strategy types,
+        not just whether strategies are the same or different.
+        Implements a Prisoner's Dilemma-style payoff structure.
         
         Args:
             strategies (tuple): Strategies of each agent
@@ -159,91 +166,89 @@ class GameTheoryAnalyzer:
         Returns:
             np.ndarray: Payoffs for each agent
         """
-        # More comprehensive payoff calculation
-        if len(set(strategies)) == 1:
-            # Cooperative scenario
-            return np.full(self.num_agents, 5.0)
-        elif len(set(strategies)) == self.num_agents:
-            # Competitive scenario
-            return np.array([3.0, 1.0]) if self.num_agents == 2 else np.zeros(self.num_agents)
+        if self.num_agents == 2:
+            # Explicit payoff lookup for 2-agent games
+            payoff_table = {
+                ('cooperative', 'cooperative'): (5.0, 5.0),
+                ('cooperative', 'competitive'): (1.0, 6.0),
+                ('cooperative', 'mixed'): (3.0, 4.0),
+                ('competitive', 'cooperative'): (6.0, 1.0),
+                ('competitive', 'competitive'): (2.0, 2.0),
+                ('competitive', 'mixed'): (4.0, 3.0),
+                ('mixed', 'cooperative'): (4.0, 3.0),
+                ('mixed', 'competitive'): (3.0, 4.0),
+                ('mixed', 'mixed'): (3.5, 3.5),
+            }
+            return np.array(payoff_table.get(tuple(strategies), (0.0, 0.0)))
         else:
-            # Mixed strategy scenario
-            return np.array([2.0, 4.0]) if self.num_agents == 2 else np.zeros(self.num_agents)
+            # For n-agent games: cooperative bonus when all cooperate,
+            # reduced payoffs otherwise
+            if len(set(strategies)) == 1 and strategies[0] == 'cooperative':
+                return np.full(self.num_agents, 5.0)
+            elif all(s == 'competitive' for s in strategies):
+                return np.full(self.num_agents, 2.0)
+            else:
+                return np.full(self.num_agents, 3.0)
     
     def nash_equilibrium(self, payoff_matrix):
         """
-        Identify Nash Equilibrium in the game
+        BUG 16 FIX: Correctly identify Nash Equilibrium in the game.
+        Uses stored strategy combinations and proper index mapping.
         
         Args:
             payoff_matrix (np.ndarray): Payoff matrix
         
         Returns:
-            list: Nash Equilibrium strategies
+            list: Nash Equilibrium strategy combinations
         """
+        if self.strategy_combinations is None or self.combination_to_index is None:
+            raise ValueError("Must call create_payoff_matrix() before nash_equilibrium()")
+        
         nash_equilibria = []
         
         # Ensure payoff_matrix is 2D
         if payoff_matrix.ndim == 1:
             payoff_matrix = payoff_matrix.reshape(1, -1)
         
-        # Generate all possible strategy combinations
-        strategy_combinations = list(itertools.product(
-            range(payoff_matrix.shape[0]), 
-            repeat=self.num_agents
-        ))
+        num_combinations = len(self.strategy_combinations)
         
-        for combination in strategy_combinations:
-            try:
-                is_nash = self._is_nash_equilibrium(payoff_matrix, combination)
-                if is_nash:
-                    nash_equilibria.append(combination)
-            except Exception as e:
-                print(f"Error checking combination {combination}: {e}")
+        for row_idx in range(num_combinations):
+            combination = self.strategy_combinations[row_idx]
+            is_nash = True
+            
+            for agent in range(self.num_agents):
+                current_payoff = payoff_matrix[row_idx, agent]
+                current_strategy = combination[agent]
+                
+                # Check all possible alternative strategies for this agent
+                for alt_strategy in self.strategies:
+                    if alt_strategy == current_strategy:
+                        continue
+                    
+                    # Create alternative combination
+                    alt_combination = list(combination)
+                    alt_combination[agent] = alt_strategy
+                    alt_combo_tuple = tuple(alt_combination)
+                    
+                    # Look up the row index for the alternative combination
+                    if alt_combo_tuple not in self.combination_to_index:
+                        continue
+                    
+                    alt_row = self.combination_to_index[alt_combo_tuple]
+                    alt_payoff = payoff_matrix[alt_row, agent]
+                    
+                    # If agent can improve by deviating, this is not Nash Equilibrium
+                    if alt_payoff > current_payoff:
+                        is_nash = False
+                        break
+                
+                if not is_nash:
+                    break
+            
+            if is_nash:
+                nash_equilibria.append(combination)
         
         return nash_equilibria
-    
-    def _is_nash_equilibrium(self, payoff_matrix, strategy_combination):
-        """
-        Check if a strategy combination is a Nash Equilibrium
-        
-        Args:
-            payoff_matrix (np.ndarray): Payoff matrix
-            strategy_combination (tuple): Current strategy combination
-        
-        Returns:
-            bool: Whether the combination is a Nash Equilibrium
-        """
-        # Ensure strategy_combination is valid
-        if len(strategy_combination) != self.num_agents:
-            return False
-        
-        # Get current payoffs
-        try:
-            current_payoffs = payoff_matrix[strategy_combination]
-        except IndexError:
-            return False
-        
-        # Ensure current_payoffs is a numpy array
-        current_payoffs = np.atleast_1d(current_payoffs)
-        
-        # Check if any agent can unilaterally improve their payoff
-        for agent in range(self.num_agents):
-            for alternative_strategy in range(payoff_matrix.shape[0]):
-                # Create alternative combination
-                alternative_combination = list(strategy_combination)
-                alternative_combination[agent] = alternative_strategy
-                
-                try:
-                    alternative_payoffs = payoff_matrix[tuple(alternative_combination)]
-                    alternative_payoffs = np.atleast_1d(alternative_payoffs)
-                    
-                    # Compare payoffs
-                    if alternative_payoffs[agent] > current_payoffs[agent]:
-                        return False
-                except IndexError:
-                    continue
-        
-        return True
     
     def cooperation_potential(self, payoff_matrix):
         """
@@ -345,9 +350,7 @@ def run_reward_shaping_experiment():
     })
     
     # Simulate some interactions
-    # This is a mock simulation - replace with your actual environment logic
     def mock_agent_interaction():
-        # Simulate different agent states and rewards
         states = [
             np.random.rand(5, 5),  # Agent 1 state
             np.random.rand(5, 5)   # Agent 2 state
@@ -366,10 +369,7 @@ def run_reward_shaping_experiment():
     # Print reward statistics
     print(reward_shaper.get_reward_statistics())
 
-# Example usage
+# BUG 20 FIX: Single __main__ block instead of two separate ones
 if __name__ == "__main__":
     run_reward_shaping_experiment()
-
-# Example usage and execution
-if __name__ == "__main__":
     run_game_theory_analysis()

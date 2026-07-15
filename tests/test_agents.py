@@ -8,7 +8,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
 # Import the agents and environment to test
-from src.environment import ScarseGridEnv
+# BUG 1 FIX: Use correct class name ScarceGridEnv
+from src.environment import ScarceGridEnv
+# BUG 2 FIX: Import QLearningAgent (now exists in agents.py)
 from src.agents import QLearningAgent, MultiAgentQLearning
 
 class TestQLearningAgent(unittest.TestCase):
@@ -16,7 +18,7 @@ class TestQLearningAgent(unittest.TestCase):
         """
         Set up the environment and agent before each test
         """
-        self.env = ScarseGridEnv(grid_size=5)
+        self.env = ScarceGridEnv(grid_size=5)
         self.agent = QLearningAgent(
             action_space=self.env.action_space,
             observation_space=self.env.observation_space
@@ -78,20 +80,22 @@ class TestQLearningAgent(unittest.TestCase):
         # Reset environment
         state, _ = self.env.reset()
         
-        # Perform an action
+        # Force exploitation to get predictable action
+        self.agent.exploration_rate = 0.0
         action = self.agent.choose_action(state)
         
         # Simulate step
         next_state, reward, done, _, _ = self.env.step([action, action])
         
-        # Store initial Q-value
+        # Manually set a known Q-value so the update is detectable
         state_key = self.agent.get_state_key(state)
-        initial_q_value = self.agent.q_table[state_key][action]
+        self.agent.q_table[state_key][action] = 1.0
+        initial_q_value = 1.0
         
-        # Update Q-value
-        self.agent.update(state, action, reward[0], next_state, done)
+        # Use a known non-zero reward to ensure the update changes the value
+        self.agent.update(state, action, 5.0, next_state, done)
         
-        # Check Q-value update
+        # Check Q-value changed
         updated_q_value = self.agent.q_table[state_key][action]
         self.assertNotEqual(initial_q_value, updated_q_value)
     
@@ -120,7 +124,8 @@ class TestMultiAgentQLearning(unittest.TestCase):
         """
         Set up multi-agent environment
         """
-        self.env = ScarseGridEnv(grid_size=5)
+        # BUG 1 FIX: Use correct class name ScarceGridEnv
+        self.env = ScarceGridEnv(grid_size=5)
         self.multi_agent_learning = MultiAgentQLearning(
             env=self.env, 
             num_agents=2
@@ -136,7 +141,7 @@ class TestMultiAgentQLearning(unittest.TestCase):
             2
         )
         
-        # Verify each agent is a QLearningAgent
+        # BUG 2 FIX: Verify each agent is a QLearningAgent
         for agent in self.multi_agent_learning.agents:
             self.assertIsInstance(agent, QLearningAgent)
     
@@ -144,8 +149,8 @@ class TestMultiAgentQLearning(unittest.TestCase):
         """
         Test that agents learn independently
         """
-        # Reset environment
-        states = self.env.reset()
+        # BUG 4 FIX: Properly unpack reset() return value
+        state, _ = self.env.reset()
         
         # Get initial Q-tables
         initial_q_tables = [
@@ -153,24 +158,21 @@ class TestMultiAgentQLearning(unittest.TestCase):
             for agent in self.multi_agent_learning.agents
         ]
         
-        # Perform some training steps
+        # BUG 18 FIX: Both agents see the same grid state
         actions = [
             agent.choose_action(state) 
-            for agent, state in zip(
-                self.multi_agent_learning.agents, 
-                states
-            )
+            for agent in self.multi_agent_learning.agents
         ]
         
-        next_states, rewards, done, _, _ = self.env.step(actions)
+        next_state, rewards, done, _, _ = self.env.step(actions)
         
-        # Update each agent
+        # BUG 18 FIX: Both agents see the same grid state for update
         for i, agent in enumerate(self.multi_agent_learning.agents):
             agent.update(
-                states[i], 
+                state, 
                 actions[i], 
                 rewards[i], 
-                next_states[i], 
+                next_state, 
                 done
             )
         
@@ -186,12 +188,12 @@ class TestMultiAgentQLearning(unittest.TestCase):
         """
         Test basic multi-agent training loop
         """
-        # Perform a short training session
+        # BUG 11 FIX: train() now returns per-episode rewards
         agent_rewards = self.multi_agent_learning.train(
             num_episodes=10
         )
         
-        # Verify rewards list
+        # Verify rewards list structure
         self.assertEqual(len(agent_rewards), 2)
         self.assertEqual(len(agent_rewards[0]), 10)
         self.assertEqual(len(agent_rewards[1]), 10)

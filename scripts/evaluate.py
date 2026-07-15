@@ -9,7 +9,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
 # Import project modules
+# BUG 1 FIX: Use correct class name ScarceGridEnv
 from src.environment import ScarceGridEnv
+# BUG 2 FIX: Import QLearningAgent (now exists in agents.py)
 from src.agents import QLearningAgent, MultiAgentQLearning
 from src.game_theory import GameTheoryAnalyzer
 from src.utils import (
@@ -66,7 +68,7 @@ class ModelEvaluator:
         
         if model_path and os.path.exists(model_path):
             try:
-                # Load agent Q-tables
+                # BUG 6 FIX: QLearningAgent has q_table attribute, so this now works
                 for i, agent in enumerate(multi_agent_system.agents):
                     agent_file = os.path.join(model_path, f'agent_{i}_qtable.npy')
                     agent.q_table = np.load(agent_file, allow_pickle=True).item()
@@ -94,33 +96,30 @@ class ModelEvaluator:
         }
         
         for episode in range(num_episodes):
-            # Reset environment
-            states = self.env.reset()
+            # BUG 4 FIX: Properly unpack reset() return value
+            state, _ = self.env.reset()
             done = False
             steps = 0
             episode_rewards = [0, 0]  # Rewards for each agent
             
             while not done:
-                # Get deterministic actions (no exploration)
+                # BUG 6 FIX: QLearningAgent has q_table, so deterministic action selection works
                 actions = [
                     np.argmax(agent.q_table.get(
                         tuple(state.flatten()), 
                         np.zeros(self.env.action_space.n)
                     )) 
-                    for agent, state in zip(
-                        self.multi_agent_learning.agents, 
-                        states
-                    )
+                    for agent in self.multi_agent_learning.agents
                 ]
                 
                 # Environment step
-                next_states, rewards, done, _, info = self.env.step(actions)
+                next_state, rewards, done, _, info = self.env.step(actions)
                 
                 # Track rewards
                 for i in range(len(rewards)):
                     episode_rewards[i] += rewards[i]
                 
-                states = next_states
+                state = next_state
                 steps += 1
                 
                 # Prevent infinite loops
@@ -170,16 +169,22 @@ class ModelEvaluator:
         """
         agent_rewards = list(zip(*reward_distributions))
         
+        agent_1_mean = np.mean(agent_rewards[0])
+        agent_2_mean = np.mean(agent_rewards[1])
+        
+        # BUG 17 FIX: Handle division by zero when agent 2's mean reward is 0
+        reward_ratio = agent_1_mean / agent_2_mean if agent_2_mean != 0 else float('inf')
+        
         return {
             'agent_1_rewards': {
-                'mean': np.mean(agent_rewards[0]),
+                'mean': agent_1_mean,
                 'std': np.std(agent_rewards[0])
             },
             'agent_2_rewards': {
-                'mean': np.mean(agent_rewards[1]),
+                'mean': agent_2_mean,
                 'std': np.std(agent_rewards[1])
             },
-            'reward_ratio': np.mean(agent_rewards[0]) / np.mean(agent_rewards[1])
+            'reward_ratio': reward_ratio
         }
     
     def visualize_results(self, performance_metrics):
@@ -236,7 +241,7 @@ class ModelEvaluator:
         interaction_analysis = self.analyze_agent_interactions(performance_metrics)
         
         report = f"""
-        === ScarseGrid Multi-Agent Evaluation Report ===
+        === ScarceGrid Multi-Agent Evaluation Report ===
         
         Performance Metrics:
         - Average Total Reward: {interaction_analysis['average_total_reward']:.2f}
@@ -260,8 +265,11 @@ class ModelEvaluator:
         
         print(report)
         
-        # Optional: Save report to file
-        with open(os.path.join(project_root, 'results', 'evaluation_report.txt'), 'w') as f:
+        # BUG 19 FIX: Ensure results directory exists before writing
+        results_dir = os.path.join(project_root, 'results')
+        os.makedirs(results_dir, exist_ok=True)
+        
+        with open(os.path.join(results_dir, 'evaluation_report.txt'), 'w') as f:
             f.write(report)
 
 def main():

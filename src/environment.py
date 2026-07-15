@@ -3,20 +3,22 @@ import gymnasium as gym
 from gymnasium import spaces
 import random
 
-class ScarseGridEnv(gym.Env):
-    def __init__(self, grid_size=5, seed_value=None):  # Changed from 'seed' to 'seed_value'
+class ScarceGridEnv(gym.Env):
+    def __init__(self, grid_size=5, seed_value=None, max_steps=200):
         """
-        Initialize the ScarseGrid environment
+        Initialize the ScarceGrid environment
         
         Args:
             grid_size (int): Size of the grid
             seed_value (int, optional): Random seed for reproducibility
+            max_steps (int, optional): Maximum steps before truncation
         """
         super().__init__()
         
         # Environment configuration
         self.grid_size = grid_size
         self.seed_value = seed_value  # Store seed value
+        self.max_steps = max_steps
         
         # Set random seed if provided
         if seed_value is not None:
@@ -30,10 +32,10 @@ class ScarseGridEnv(gym.Env):
         # Action space (Up, Right, Down, Left)
         self.action_space = spaces.Discrete(4)
         
-        # Observation space
+        # Observation space (BUG 8 FIX: high matches actual max reward value)
         self.observation_space = spaces.Box(
             low=0, 
-            high=1, 
+            high=self.super_reward, 
             shape=(grid_size, grid_size), 
             dtype=np.float32
         )
@@ -43,6 +45,7 @@ class ScarseGridEnv(gym.Env):
         
         # Grid state
         self.grid = None
+        self.steps_taken = 0
     
     def reset(self, seed=None):
         """
@@ -54,11 +57,18 @@ class ScarseGridEnv(gym.Env):
         Returns:
             tuple: Initial state and additional info
         """
-        # Use provided seed or class seed
-        super().reset(seed=seed or self.seed_value)
+        # BUG 14 FIX: Use explicit None check instead of falsy `or` to handle seed=0
+        super().reset(seed=seed if seed is not None else self.seed_value)
+        
+        # Apply seeding
+        effective_seed = seed if seed is not None else self.seed_value
+        if effective_seed is not None:
+            np.random.seed(effective_seed)
+            random.seed(effective_seed)
         
         # Initialize grid
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        self.steps_taken = 0
         
         # Place rewards
         self._place_rewards()
@@ -66,7 +76,8 @@ class ScarseGridEnv(gym.Env):
         # Initialize agent positions
         self._place_agents()
         
-        return self.grid, {}
+        # BUG FIX: Return a copy to prevent external mutation of internal state
+        return self.grid.copy(), {}
     
     def _place_rewards(self):
         """
@@ -87,22 +98,33 @@ class ScarseGridEnv(gym.Env):
         # Place minor rewards
         for pos in reward_positions[1:]:
             self.grid[pos] = random.choice(self.minor_rewards)
+        
+        # Store reward positions for agent placement
+        self._reward_positions = set(reward_positions)
     
     def _place_agents(self):
         """
         Randomly place agents on the grid
+        BUG 13 FIX: Ensure agents do not spawn on reward positions
         """
-        # Ensure agents are on different cells
-        while True:
-            positions = [
-                (random.randint(0, self.grid_size-1), 
-                 random.randint(0, self.grid_size-1)) 
-                for _ in range(2)
+        # Find non-reward positions
+        non_reward_positions = [
+            (r, c) for r in range(self.grid_size)
+            for c in range(self.grid_size)
+            if self.grid[r, c] == 0
+        ]
+        
+        if len(non_reward_positions) >= 2:
+            positions = random.sample(non_reward_positions, 2)
+        else:
+            # Fallback if grid is mostly rewards
+            all_positions = [
+                (r, c) for r in range(self.grid_size)
+                for c in range(self.grid_size)
             ]
-            
-            if positions[0] != positions[1]:
-                self.agent_positions = positions
-                break
+            positions = random.sample(all_positions, 2)
+        
+        self.agent_positions = positions
     
     def step(self, actions):
         """
@@ -129,24 +151,40 @@ class ScarseGridEnv(gym.Env):
             (0, -1)    # Left
         ]
         
-        # Move agents
-        rewards = [0.0, 0.0]
+        # Increment step counter
+        self.steps_taken += 1
+        
+        # Calculate new positions
+        new_positions = []
         for i, (action, pos) in enumerate(zip(actions, self.agent_positions)):
-            # Calculate new position
             dy, dx = directions[action]
             new_y = max(0, min(self.grid_size-1, pos[0] + dy))
             new_x = max(0, min(self.grid_size-1, pos[1] + dx))
-            
-            # Update agent position
-            self.agent_positions[i] = (new_y, new_x)
-            
-            # Check for rewards
-            rewards[i] = self.grid[new_y, new_x]
-            
+            new_positions.append((new_y, new_x))
+        
+        # BUG 12 FIX: Collision detection - ensure agents never end up on same cell
+        if new_positions[0] == new_positions[1]:
+            new_positions[1] = self.agent_positions[1]
+        # Re-check: if agent 0 moved to where agent 1 just stayed
+        if new_positions[0] == new_positions[1]:
+            new_positions[0] = self.agent_positions[0]
+        
+        # Move agents and collect rewards
+        rewards = [0.0, 0.0]
+        for i, new_pos in enumerate(new_positions):
+            self.agent_positions[i] = new_pos
+            rewards[i] = self.grid[new_pos]
             # Remove collected reward
-            self.grid[new_y, new_x] = 0
+            self.grid[new_pos] = 0
         
-        # Check if all rewards are collected
-        done = np.sum(self.grid) == 0
+        # Check if all rewards are collected (cast to Python bool)
+        done = bool(np.sum(self.grid) == 0)
         
-        return self.grid, rewards, done, False, {}
+        # Check truncation (max steps exceeded)
+        truncated = bool(self.steps_taken >= self.max_steps)
+        
+        # Cast rewards to Python floats
+        rewards = [float(r) for r in rewards]
+        
+        # Return a copy to prevent external mutation
+        return self.grid.copy(), rewards, done, truncated, {}

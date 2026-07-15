@@ -8,7 +8,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
 # Import project modules
+# BUG 1 FIX: Use correct class name ScarceGridEnv (not ScarseGridEnv)
 from src.environment import ScarceGridEnv
+# BUG 2 FIX: Import QLearningAgent (now exists in agents.py)
 from src.agents import QLearningAgent, MultiAgentQLearning
 from src.game_theory import GameTheoryAnalyzer, RewardShapingStrategy
 from src.utils import (
@@ -19,7 +21,7 @@ from src.utils import (
     visualize_grid
 )
 
-class ScarseGridTrainer:
+class ScarceGridTrainer:
     def __init__(self, config=None):
         """
         Initialize training environment and configuration
@@ -79,8 +81,8 @@ class ScarseGridTrainer:
             
             # Main training loop
             for episode in range(num_episodes):
-                # Reset environment
-                states = self.env.reset()
+                # BUG 4 FIX: Properly unpack reset() return value
+                state, _ = self.env.reset()
                 
                 # Episode tracking
                 episode_reward = 0
@@ -88,36 +90,35 @@ class ScarseGridTrainer:
                 steps = 0
                 
                 while not done and steps < max_steps:
-                    # Get actions from multi-agent system
+                    # BUG 18 FIX: Both agents see the same grid state
+                    # BUG 3 FIX: Use choose_action() method (exists on QLearningAgent)
                     actions = [
                         agent.choose_action(state) 
-                        for agent, state in zip(
-                            self.multi_agent_learning.agents, 
-                            states
-                        )
+                        for agent in self.multi_agent_learning.agents
                     ]
                     
                     # Environment step
-                    next_states, rewards, done, _, info = self.env.step(actions)
+                    next_state, rewards, done, _, info = self.env.step(actions)
                     
                     # Reward shaping
                     shaped_rewards = [
-                        self.reward_shaper.shape_reward(states, reward) 
+                        self.reward_shaper.shape_reward([state, state], reward) 
                         for reward in rewards
                     ]
                     
-                    # Update agents
+                    # BUG 3 FIX: Use update() method (exists on QLearningAgent)
+                    # BUG 18 FIX: Both agents see the same grid state
                     for i, agent in enumerate(self.multi_agent_learning.agents):
                         agent.update(
-                            states[i], 
+                            state, 
                             actions[i], 
                             shaped_rewards[i], 
-                            next_states[i], 
+                            next_state, 
                             done
                         )
                     
                     # Update states and rewards
-                    states = next_states
+                    state = next_state
                     episode_reward += sum(rewards)
                     steps += 1
                 
@@ -213,7 +214,7 @@ def main():
     """
     try:
         # Initialize trainer
-        trainer = ScarseGridTrainer()
+        trainer = ScarceGridTrainer()
         
         # Start training
         trainer.train()

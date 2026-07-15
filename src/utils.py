@@ -4,6 +4,7 @@ import seaborn as sns
 import logging
 import json
 import os
+import random
 from datetime import datetime
 
 class Logger:
@@ -21,25 +22,30 @@ class Logger:
         self.log_dir = os.path.join(os.getcwd(), 'logs')
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # Configure logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        
-        # File handler
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = os.path.join(self.log_dir, f'{project_name}_{timestamp}.log')
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s: %(message)s'
-        ))
-        
-        # Add file handler to root logger
-        logging.getLogger().addHandler(file_handler)
-        
+        # BUG 22 FIX: Use a dedicated logger instance instead of root logger
+        # to avoid issues with multiple Logger instances and handler accumulation
         self.logger = logging.getLogger(project_name)
+        self.logger.setLevel(logging.INFO)
+        
+        # Prevent duplicate handlers if multiple Logger instances are created
+        if not self.logger.handlers:
+            # Console handler
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(logging.Formatter(
+                '%(asctime)s - %(levelname)s: %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            ))
+            self.logger.addHandler(console_handler)
+            
+            # File handler
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file = os.path.join(self.log_dir, f'{project_name}_{timestamp}.log')
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(logging.Formatter(
+                '%(asctime)s - %(levelname)s: %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            ))
+            self.logger.addHandler(file_handler)
     
     def info(self, message):
         """Log informational message"""
@@ -89,11 +95,20 @@ class MetricsTracker:
     
     def get_summary_statistics(self):
         """
-        Calculate summary statistics
+        BUG 23 FIX: Calculate summary statistics safely for empty metrics
         
         Returns:
             dict: Summary statistics
         """
+        if not self.metrics['rewards']:
+            return {
+                'mean_reward': 0,
+                'std_reward': 0,
+                'max_reward': 0,
+                'min_reward': 0,
+                'mean_episode_length': 0
+            }
+        
         return {
             'mean_reward': np.mean(self.metrics['rewards']),
             'std_reward': np.std(self.metrics['rewards']),
@@ -106,8 +121,12 @@ class MetricsTracker:
         """
         Create comprehensive metrics visualization
         """
+        if not self.metrics['rewards']:
+            print("No metrics to plot")
+            return
+        
         fig, axs = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle('ScarseGrid Learning Metrics')
+        fig.suptitle('ScarceGrid Learning Metrics')
         
         # Reward progression
         axs[0, 0].plot(self.metrics['rewards'])
@@ -212,15 +231,20 @@ class RandomSeedManager:
     @staticmethod
     def set_seed(seed=42):
         """
-        Set consistent random seeds
+        BUG 24 FIX: Set consistent random seeds for all relevant libraries
         
         Args:
             seed (int): Seed value
         """
         np.random.seed(seed)
-        # Add seeds for other libraries if needed
-        # random.seed(seed)
-        # torch.manual_seed(seed)
+        random.seed(seed)
+        try:
+            import torch
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        except ImportError:
+            pass  # torch not available
 
 def visualize_grid(grid, title='Grid Visualization'):
     """
@@ -239,10 +263,13 @@ def visualize_grid(grid, title='Grid Visualization'):
 def main():
     # Logger demonstration
     logger = Logger()
-    logger.info("ScarseGrid project initialized")
+    logger.info("ScarceGrid project initialized")
     
     # Metrics tracking
     metrics_tracker = MetricsTracker()
+    
+    # BUG 23 FIX: Safe to call on empty metrics now
+    print("Summary (empty):", metrics_tracker.get_summary_statistics())
     
     # Configuration management
     config_manager = ConfigManager()
